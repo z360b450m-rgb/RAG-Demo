@@ -1,0 +1,7 @@
+.env
+data/chroma_db/
+data/embedding_cache.json
+__pycache__/
+*.pyc
+.streamlit/
+venv/
