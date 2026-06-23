@@ -62,12 +62,11 @@ class DirectRAGPipeline:
         )
 
     def ingest_document(self, file_path: Path) -> int:
-        file_hash = self.embedding_service.compute_file_hash(str(file_path))
-        cached = self.embedding_service.is_cached(file_hash)
-        if cached is not None:
-            return len(cached)
-
         filename, text = load_document(file_path)
+
+        # Replace-on-reingest: drop any previous chunks for this filename
+        self.vector_store.delete_by_source(filename)
+
         chunks = self.chunker.chunk_text(text, source_path=filename)
         if not chunks:
             return 0
@@ -75,8 +74,7 @@ class DirectRAGPipeline:
         chunk_texts = [c.text for c in chunks]
         metadatas = [c.metadata for c in chunks]
         embeddings = self.embedding_service.embed_texts(chunk_texts)
-        chunk_ids = self.vector_store.add_chunks(chunk_texts, embeddings, metadatas)
-        self.embedding_service.mark_cached(file_hash, chunk_ids)
+        self.vector_store.add_chunks(chunk_texts, embeddings, metadatas)
         return len(chunks)
 
     def build_prompt(

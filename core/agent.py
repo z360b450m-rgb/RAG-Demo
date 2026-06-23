@@ -9,7 +9,7 @@ ToolMessage objects exclusively.
 from typing import Generator, List
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from core.llm import EmbeddingService, build_llm
 from core.prompt import AGENT_SYSTEM_PROMPT
@@ -20,9 +20,14 @@ from tools.registry import build_tools
 class RAGAgent:
     """Agent backed by LangChain's create_agent (CompiledStateGraph)."""
 
-    def __init__(self, enable_web_search: bool = False):
-        self.embedding_service = EmbeddingService()
-        self.vector_store = VectorStore()
+    def __init__(
+        self,
+        enable_web_search: bool = False,
+        embedding_service: EmbeddingService = None,
+        vector_store: VectorStore = None,
+    ):
+        self.embedding_service = embedding_service or EmbeddingService()
+        self.vector_store = vector_store or VectorStore()
 
         self.tools = build_tools(
             self.embedding_service, self.vector_store, enable_web=enable_web_search
@@ -54,33 +59,30 @@ class RAGAgent:
         return output
 
     # ------------------------------------------------------------------
-    # Streaming query — yields text tokens for Streamlit write_stream
+    # Streaming query — streams tokens, then syncs full history
     # ------------------------------------------------------------------
     def query_stream(self, user_input: str) -> Generator[str, None, None]:
-        messages = [*self.chat_history, HumanMessage(content=user_input)]
-        collected = ""
+        input_messages = [*self.chat_history, HumanMessage(content=user_input)]
+        printed = ""
 
+        # Phase 1: stream tokens for real-time UX
         for chunk, _metadata in self._graph.stream(
-            {"messages": messages},
+            {"messages": input_messages},
             stream_mode="messages",
         ):
             if isinstance(chunk, AIMessage) and chunk.content:
-                new = chunk.content[len(collected):]
+                new = chunk.content[len(printed):]
                 if new:
                     yield new
-                collected = chunk.content
+                printed = chunk.content
 
-            # Reached terminal AIMessage (no tool_calls) → stop
-            if isinstance(chunk, AIMessage) and not chunk.tool_calls:
-                break
-
-        # Build final history from the full response
-        final_msg = AIMessage(content=collected)
-        self.chat_history = [
-            *self.chat_history,
-            HumanMessage(content=user_input),
-            final_msg,
-        ]
+        # Phase 2: invoke to get the COMPLETE, correctly-ordered message
+        # history.  stream(mode="messages") only gives us token-level
+        # AIMessageChunks — it doesn't expose the full AIMessage(tool_calls)
+        # or ToolMessage objects.  invoke() returns every message in order:
+        #   HumanMessage → AIMessage(tool_calls) → ToolMessage → AIMessage
+        final_result = self._graph.invoke({"messages": input_messages})
+        self.chat_history = final_result["messages"]
 
     # ------------------------------------------------------------------
     # Helpers

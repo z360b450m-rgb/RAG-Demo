@@ -1,38 +1,39 @@
-import hashlib
-import json
-from pathlib import Path
-from typing import Dict, List, Optional
+"""LLM and Embedding clients — both call remote APIs.
+
+- LLM: DeepSeek (OpenAI-compatible) via LangChain ChatOpenAI
+- Embeddings: SiliconFlow (OpenAI-compatible) via openai SDK
+"""
+
+from typing import List
 
 from langchain_openai import ChatOpenAI
-from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 
 from app_config import (
-    CHUNK_OVERLAP,
-    CHUNK_SIZE,
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
     DEEPSEEK_MODEL,
-    EMBEDDING_CACHE_PATH,
-    EMBEDDING_DEVICE,
-    EMBEDDING_MODEL_NAME,
+    EMBEDDING_MODEL,
     LANGCHAIN_API_KEY,
+    LANGCHAIN_PROJECT,
     LANGCHAIN_TRACING_V2,
+    SILICONFLOW_API_KEY,
+    SILICONFLOW_BASE_URL,
 )
-from core.prompt import BGE_QUERY_PREFIX
 
 # ---------------------------------------------------------------------------
-# LangSmith tracing
+# LangSmith tracing (env-driven; affects all LangChain calls automatically)
 # ---------------------------------------------------------------------------
 if LANGCHAIN_TRACING_V2 and LANGCHAIN_API_KEY:
     import os
 
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_API_KEY"] = LANGCHAIN_API_KEY
-    os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "RAG_Agent")
+    os.environ["LANGCHAIN_PROJECT"] = LANGCHAIN_PROJECT
 
 
 # ---------------------------------------------------------------------------
-# LLM factory — returns a LangChain ChatOpenAI pointed at DeepSeek
+# LLM factory
 # ---------------------------------------------------------------------------
 def build_llm(temperature: float = 0.7, streaming: bool = True) -> ChatOpenAI:
     return ChatOpenAI(
@@ -45,68 +46,34 @@ def build_llm(temperature: float = 0.7, streaming: bool = True) -> ChatOpenAI:
 
 
 # ---------------------------------------------------------------------------
-# Embedding Service (keeps sentence-transformers — no LangChain wrapper needed)
+# Embedding Service — calls SiliconFlow over HTTP
 # ---------------------------------------------------------------------------
 class EmbeddingService:
+    """Thin client over SiliconFlow's OpenAI-compatible embedding endpoint."""
+
     def __init__(
         self,
-        model_name: str = EMBEDDING_MODEL_NAME,
-        device: str = EMBEDDING_DEVICE,
-        cache_path: str = EMBEDDING_CACHE_PATH,
+        api_key: str = SILICONFLOW_API_KEY,
+        base_url: str = SILICONFLOW_BASE_URL,
+        model: str = EMBEDDING_MODEL,
     ):
-        self.model = SentenceTransformer(model_name, device=device)
-        self.cache_path = Path(cache_path)
-        self._cache: Dict[str, List[str]] = self._load_cache()
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.model = model
 
-    def _load_cache(self) -> Dict[str, List[str]]:
-        if self.cache_path.exists():
-            try:
-                return json.loads(self.cache_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                return {}
-        return {}
-
-    def _save_cache(self):
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self.cache_path.write_text(
-            json.dumps(self._cache, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-    def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        embeddings = self.model.encode(
-            texts, normalize_embeddings=True, show_progress_bar=False
-        )
-        return embeddings.tolist()
+    def embed_texts(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+        """Embed a list of texts. Batches to keep request size under control."""
+        if not texts:
+            return []
+        out: List[List[float]] = []
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            resp = self.client.embeddings.create(model=self.model, input=batch)
+            # OpenAI SDK returns data sorted by request index
+            out.extend([d.embedding for d in resp.data])
+        return out
 
     def embed_query(self, query: str) -> List[float]:
-        prefixed = f"{BGE_QUERY_PREFIX}{query}"
-        embedding = self.model.encode(
-            [prefixed], normalize_embeddings=True, show_progress_bar=False
-        )
-        return embedding[0].tolist()
-
-    @staticmethod
-    def compute_file_hash(file_path: str) -> str:
-        hasher = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                hasher.update(chunk)
-        hasher.update(f"|{CHUNK_SIZE}|{CHUNK_OVERLAP}".encode())
-        return hasher.hexdigest()
-
-    def is_cached(self, file_hash: str) -> Optional[List[str]]:
-        return self._cache.get(file_hash)
-
-    def mark_cached(self, file_hash: str, chunk_ids: List[str]):
-        self._cache[file_hash] = chunk_ids
-        self._save_cache()
-
-    def remove_from_cache(self, file_hash: str):
-        if file_hash in self._cache:
-            del self._cache[file_hash]
-            self._save_cache()
-
-    @property
-    def dimension(self) -> int:
-        return self.model.get_sentence_embedding_dimension()
+        # BGE models are asymmetric — query prefix is recommended.
+        # SiliconFlow handles this server-side for BGE; we send raw text.
+        resp = self.client.embeddings.create(model=self.model, input=[query])
+        return resp.data[0].embedding

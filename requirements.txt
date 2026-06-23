@@ -1,11 +1,28 @@
+# LLM + Agent
 openai>=1.0.0,<2.0.0
-chromadb>=0.5.0,<0.6.0
-sentence-transformers>=2.7.0,<3.0.0
-pypdf>=4.0.0,<5.0.0
+langchain>=1.0.0,<2.0.0
+langchain-openai>=0.2.0,<1.0.0
+langchain-core>=0.3.0,<1.0.0
+langchain-text-splitters>=0.3.0,<1.0.0
+
+# Vector DB (Qdrant Cloud)
+qdrant-client>=1.10.0,<2.0.0
+
+# Backend
+fastapi>=0.110.0,<1.0.0
+uvicorn[standard]>=0.27.0,<1.0.0
+python-multipart>=0.0.9,<1.0.0
+sse-starlette>=2.0.0,<3.0.0
+
+# HTTP client (for Streamlit → FastAPI calls)
+httpx>=0.27.0,<1.0.0
+
+# Frontend
 streamlit>=1.31.0,<2.0.0
+
+# Document ingestion
+pypdf>=4.0.0,<5.0.0
+
+# Utilities
 python-dotenv>=1.0.0,<2.0.0
 langsmith>=0.1.0,<1.0.0
-langchain>=0.3.0,<1.0.0
-langchain-openai>=0.2.0,<1.0.0
-langchain-community>=0.3.0,<1.0.0
-langchain-core>=0.3.0,<1.0.0

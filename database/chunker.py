@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import List
 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 
 @dataclass
 class Chunk:
@@ -10,32 +12,34 @@ class Chunk:
 
 
 class TextChunker:
-    def __init__(self, chunk_size: int = 500, chunk_overlap: int = 100):
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+    """Splits text with awareness of paragraph, sentence, and word boundaries.
+
+    Uses LangChain's RecursiveCharacterTextSplitter which tries each
+    separator in order — paragraphs first, then newlines, then sentence
+    delimiters, then spaces — so chunks rarely break mid-sentence.
+    """
+
+    def __init__(self, chunk_size: int = 800, chunk_overlap: int = 200):
+        self.splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", "。", "！", "？", "；", " ", ""],
+        )
 
     def chunk_text(self, text: str, source_path: str = "") -> List[Chunk]:
+        splits = self.splitter.split_text(text)
         chunks: List[Chunk] = []
-        step = self.chunk_size - self.chunk_overlap
-        if step <= 0:
-            raise ValueError("chunk_size must be greater than chunk_overlap")
+        actual_total = len(splits)
 
-        total = (len(text) + step - 1) // step
-        for i in range(0, len(text), step):
-            chunk_text = text[i:i + self.chunk_size]
-            if not chunk_text.strip():
+        for idx, split_text in enumerate(splits):
+            if not split_text.strip():
                 continue
             chunks.append(Chunk(
-                text=chunk_text,
+                text=split_text,
                 metadata={
                     "source": source_path,
-                    "chunk_index": len(chunks),
-                    "total_chunks": total,
-                }
+                    "chunk_index": idx,
+                    "total_chunks": actual_total,
+                },
             ))
-
-        actual_total = len(chunks)
-        for c in chunks:
-            c.metadata["total_chunks"] = actual_total
-
         return chunks
